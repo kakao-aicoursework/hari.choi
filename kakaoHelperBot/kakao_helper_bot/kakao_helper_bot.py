@@ -8,28 +8,35 @@ from datetime import datetime
 import pynecone as pc
 from pynecone.base import Base
 
+from langchain import LLMChain
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+)
+from langchain.schema import SystemMessage
+
+from langchain.utilities import DuckDuckGoSearchAPIWrapper
+import tiktoken
+
+
 openai.api_key = open("../appkey.txt", "r").read()
 os.environ["OPENAI_API_KEY"] = open("../appkey.txt", "r").read()
+llm = ChatOpenAI(temperature=0.8)
+info = open("project_data_카카오싱크.txt", "r").read()
 
 def call_gpt(text) -> str:
+    global info
 
     system_instruction = (f"assistant는 정보를 제공하는 앱으로서 동작한다."
-                          f"너의 이름은 카카오 헬퍼봇이야."
-                          f"")
+                          f"너의 이름은 카카오 헬퍼봇이야. 너가 알고 있는 정보는 다음과 같아."
+                          f"--------------------"
+                          f"{info}")
 
-    fewshot_messages = ""
+    chat_prompt = ChatPromptTemplate.from_messages([SystemMessage(content=system_instruction),
+                                                    HumanMessagePromptTemplate.from_template("{text}\n---\n위의 내용에 응답해줘")])
 
-    messages = [{"role": "system", "content": system_instruction},
-                # *fewshot_messages,
-                {"role": "user", "content": text}
-                ]
-
-    # API 호출
-    response = openai.ChatCompletion.create(model="gpt-3.5-turbo",
-                                            messages=messages)
-    translated_text = response['choices'][0]['message']['content']
-    # Return
-    return translated_text
+    return LLMChain(llm=llm,prompt=chat_prompt).run(text=text)
 
 
 class Message(Base):

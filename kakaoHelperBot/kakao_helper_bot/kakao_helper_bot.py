@@ -19,11 +19,96 @@ from langchain.schema import SystemMessage
 from langchain.utilities import DuckDuckGoSearchAPIWrapper
 import tiktoken
 
+from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.vectorstores import Chroma
+
+CHROMA_PERSIST_DIR = "hari-chroma"
+CHROMA_COLLECTION_NAME = "hari-bot"
 
 openai.api_key = open("../appkey.txt", "r").read()
 os.environ["OPENAI_API_KEY"] = open("../appkey.txt", "r").read()
+
+_db = Chroma(
+    persist_directory=CHROMA_PERSIST_DIR,
+    embedding_function=OpenAIEmbeddings(), # openAiEmbeddings에 api key가 왜 필요하지?
+    collection_name=CHROMA_COLLECTION_NAME,
+)
+_retriever = _db.as_retriever()
+
+def query_db(query: str, use_retriever: bool = False) -> list[str]:
+    if use_retriever:
+        docs = _retriever.get_relevant_documents(query)
+    else:
+        docs = _db.similarity_search(query)
+
+    str_docs = [doc.page_content for doc in docs]
+    return str_docs
+
+
+###############################################3
+from langchain.chains import LLMChain
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import ChatPromptTemplate
+from langchain.memory import ConversationBufferMemory, FileChatMessageHistory
+
+def load_conversation_history(conversation_id: str):
+    file_path = f"history/{conversation_id}.json"
+    return FileChatMessageHistory(file_path)
+
+
+def log_user_message(history: FileChatMessageHistory, user_message: str):
+    history.add_user_message(user_message)
+
+
+def log_bot_message(history: FileChatMessageHistory, bot_message: str):
+    history.add_ai_message(bot_message)
+
+
+def get_chat_history(conversation_id: str):
+    history = load_conversation_history(conversation_id)
+    memory = ConversationBufferMemory(
+        memory_key="chat_history",
+        input_key="user_message",
+        chat_memory=history,
+    )
+
+    return memory.buffer
+
+def read_prompt_template(file_path: str) -> str:
+    with open(file_path, "r") as f:
+        prompt_template = f.read()
+
+    return prompt_template
+def create_chain(llm, template_path, output_key):
+    return LLMChain(
+        llm=llm,
+        prompt=ChatPromptTemplate.from_template(
+            template=read_prompt_template(template_path)
+        ),
+        output_key=output_key,
+        verbose=True,
+    )
 llm = ChatOpenAI(temperature=0.8)
-info = open("project_data_카카오싱크.txt", "r").read()
+DEFAULT_RESPONSE_PROMPT_TEMPLATE="template/default.txt"
+info = open("datas/project_data_카카오싱크.txt", "r").read()
+
+default_chain = create_chain(
+    llm=llm, template_path=DEFAULT_RESPONSE_PROMPT_TEMPLATE, output_key="output"
+)
+def generate_answer(user_message, conversation_id: str='fa1010') -> dict[str, str]:
+    history_file = load_conversation_history(conversation_id)
+
+    context = dict(user_message=user_message)
+    context["input"] = context["user_message"]
+    context["related_documents"] = query_db(user_message)
+    context["chat_history"] = get_chat_history(conversation_id)
+
+    answer = default_chain.run(context)
+
+    log_user_message(history_file, user_message)
+    log_bot_message(history_file, answer)
+    return {"answer": answer}
 
 def call_gpt(text) -> str:
     global info
@@ -45,24 +130,29 @@ class Message(Base):
     created_at: str
 
 
+# class Training(pc.State):
+
+
+
+
 class State(pc.State):
     """The app state."""
 
     text: str = ""
     messages: list[Message] = []
 
-    @pc.var
+    # @pc.var
     def output(self) -> str:
         if not self.text.strip():
             return "Translations will appear here."
-        translated = call_gpt(self.text)
+        translated = generate_answer(self.text)["answer"]
         return translated
 
     def post(self):
         self.messages = [
             Message(
                 original_text=self.text,
-                text=self.output,
+                text=self.output(),
                 created_at=datetime.now().strftime("%B %d, %Y %I:%M %p"),
             )
         ] + self.messages

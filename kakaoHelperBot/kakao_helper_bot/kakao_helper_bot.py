@@ -36,6 +36,8 @@ _db = Chroma(
 )
 _retriever = _db.as_retriever()
 
+
+
 def query_db(query: str, use_retriever: bool = False) -> list[str]:
     if use_retriever:
         docs = _retriever.get_relevant_documents(query)
@@ -96,7 +98,47 @@ info = open("datas/project_data_카카오싱크.txt", "r").read()
 default_chain = create_chain(
     llm=llm, template_path=DEFAULT_RESPONSE_PROMPT_TEMPLATE, output_key="output"
 )
+
+functions = [{
+    "name": "kakao_sink",
+    "description": "kakao 의 신규 서비스 카카오싱크에 대한 전반적인 정보를 가져옵니다",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+    }
+},
+    {
+    "name": "kakao_social",
+    "description": "kakao 의 신규 서비스 카카오소셜과 관련된 전반적인 정보를 가져옵니다",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+    }
+}
+]
+
 def generate_answer(user_message, conversation_id: str='fa1010') -> dict[str, str]:
+    intend_msg = [{"role": "user", "content": user_message}] # 히스토리 넣자!
+
+    completion = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo-16k",
+        messages=intend_msg,
+        functions=functions,
+        function_call="auto",
+        max_tokens=4096
+    )
+
+    target = ""
+    if "function_call" in completion['choices'][0]['message']:
+        function_name = completion["choices"][0]["message"]["function_call"]["name"]
+        print(f"call {function_name}")
+        target = function_name
+        open("debug.txt", "w").write(function_name)
+    else:
+        open("debug.txt", "w").write(completion['choices'][0]['message']['content'])
+
     history_file = load_conversation_history(conversation_id)
 
     context = dict(user_message=user_message)
@@ -104,25 +146,18 @@ def generate_answer(user_message, conversation_id: str='fa1010') -> dict[str, st
     context["related_documents"] = query_db(user_message)
     context["chat_history"] = get_chat_history(conversation_id)
 
-    answer = default_chain.run(context)
+    # chain 별로 db 분리하면 좋을듯.
+    target_chain = default_chain
+    if target == "kakao_sink":
+        target_chain = default_chain
+    elif target == "kakao_social":
+        target_chain = default_chain
+
+    answer = target_chain.run(context)
 
     log_user_message(history_file, user_message)
     log_bot_message(history_file, answer)
     return {"answer": answer}
-
-def call_gpt(text) -> str:
-    global info
-
-    system_instruction = (f"assistant는 정보를 제공하는 앱으로서 동작한다."
-                          f"너의 이름은 카카오 헬퍼봇이야. 너가 알고 있는 정보는 다음과 같아."
-                          f"--------------------"
-                          f"{info}")
-
-    chat_prompt = ChatPromptTemplate.from_messages([SystemMessage(content=system_instruction),
-                                                    HumanMessagePromptTemplate.from_template("{text}\n---\n위의 내용에 응답해줘")])
-
-    return LLMChain(llm=llm,prompt=chat_prompt).run(text=text)
-
 
 class Message(Base):
     original_text: str

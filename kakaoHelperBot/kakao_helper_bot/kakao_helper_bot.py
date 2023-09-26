@@ -29,12 +29,20 @@ CHROMA_COLLECTION_NAME = "hari-bot"
 openai.api_key = open("../appkey.txt", "r").read()
 os.environ["OPENAI_API_KEY"] = open("../appkey.txt", "r").read()
 
+# dictionary 형태가 좋을듯? _db["kakao_social"], _db["kakao_sink"]....
 _db = Chroma(
     persist_directory=CHROMA_PERSIST_DIR,
     embedding_function=OpenAIEmbeddings(), # openAiEmbeddings에 api key가 왜 필요하지?
     collection_name=CHROMA_COLLECTION_NAME,
 )
 _retriever = _db.as_retriever()
+
+_social_db = Chroma(
+    persist_directory=CHROMA_PERSIST_DIR,
+    embedding_function=OpenAIEmbeddings(), # openAiEmbeddings에 api key가 왜 필요하지?
+    collection_name=CHROMA_COLLECTION_NAME,
+)
+_social_retriever = _social_db.as_retriever()
 
 
 
@@ -43,6 +51,15 @@ def query_db(query: str, use_retriever: bool = False) -> list[str]:
         docs = _retriever.get_relevant_documents(query)
     else:
         docs = _db.similarity_search(query)
+
+    str_docs = [doc.page_content for doc in docs]
+    return str_docs
+
+def query_social_db(query: str, use_retriever: bool = False) -> list[str]:
+    if use_retriever:
+        docs = _social_retriever.get_relevant_documents(query)
+    else:
+        docs = _social_db.similarity_search(query)
 
     str_docs = [doc.page_content for doc in docs]
     return str_docs
@@ -93,7 +110,6 @@ def create_chain(llm, template_path, output_key):
     )
 llm = ChatOpenAI(temperature=0.8)
 DEFAULT_RESPONSE_PROMPT_TEMPLATE="template/default.txt"
-info = open("datas/project_data_카카오싱크.txt", "r").read()
 
 default_chain = create_chain(
     llm=llm, template_path=DEFAULT_RESPONSE_PROMPT_TEMPLATE, output_key="output"
@@ -143,15 +159,16 @@ def generate_answer(user_message, conversation_id: str='fa1010') -> dict[str, st
 
     context = dict(user_message=user_message)
     context["input"] = context["user_message"]
-    context["related_documents"] = query_db(user_message)
+    context["related_documents"] = (query_db(user_message))
     context["chat_history"] = get_chat_history(conversation_id)
 
-    # chain 별로 db 분리하면 좋을듯.
+    # chain 별로 따로 template만들면 좋을듯.
     target_chain = default_chain
     if target == "kakao_sink":
         target_chain = default_chain
     elif target == "kakao_social":
         target_chain = default_chain
+        context["releated_documents"] = query_social_db(user_message)
 
     answer = target_chain.run(context)
 
